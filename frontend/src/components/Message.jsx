@@ -27,7 +27,6 @@ export default function Message() {
   const socketRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
- 
   useEffect(() => {
     if (!userdata?._id) return;
 
@@ -40,14 +39,27 @@ export default function Message() {
     socketRef.current.on('receive_message', (message) => {
       setMessages((prev) => [...prev, message]);
 
-      
-      setPreviousChats((prev) =>
-        prev.map((chat) => {
-          const isRelated =
-            chat._id === message.sender?._id || chat._id === message.receiver?._id;
-          return isRelated ? { ...chat, lastMessage: message } : chat;
-        })
-      );
+      // Update previous chats
+      setPreviousChats((prev) => {
+        const updatedChats = [...prev];
+        
+        // Find index of the user related to this message
+        const userIndex = updatedChats.findIndex(chat => 
+          chat._id === message.sender?._id || chat._id === message.receiver?._id
+        );
+        
+        if (userIndex !== -1) {
+          const updatedUser = { ...updatedChats[userIndex], lastMessage: message };
+          
+          // Remove the user from current position
+          updatedChats.splice(userIndex, 1);
+          
+          // Add to the beginning
+          updatedChats.unshift(updatedUser);
+        }
+        
+        return updatedChats;
+      });
     });
 
     socketRef.current.on('user_typing', (data) => {
@@ -70,9 +82,7 @@ export default function Message() {
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-   
   }, [userdata?._id]);
-
 
   useEffect(() => {
     if (selectedUser?.conversationId && socketRef.current?.connected) {
@@ -81,7 +91,6 @@ export default function Message() {
     }
   }, [selectedUser]);
 
-  
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -91,7 +100,8 @@ export default function Message() {
           axios.get(`${ServerUrl}/api/allusers`, { withCredentials: true }),
         ]);
 
-        setPreviousChats(Array.isArray(chatsResponse.data) ? chatsResponse.data : []);
+        const chatsData = Array.isArray(chatsResponse.data) ? chatsResponse.data : [];
+        setPreviousChats(chatsData);
         setAllUsers(Array.isArray(usersResponse.data) ? usersResponse.data : []);
       } catch (err) {
         console.error('fetchData error:', err);
@@ -105,11 +115,16 @@ export default function Message() {
     fetchData();
   }, []);
 
-  
   const fetchMessages = useCallback(async (userId) => {
     try {
       const res = await axios.get(`${ServerUrl}/api/getallmsg/${userId}`, { withCredentials: true });
-      setMessages(Array.isArray(res.data) ? res.data : []);
+      const fetchedMessages = Array.isArray(res.data) ? res.data : [];
+      setMessages(fetchedMessages);
+      
+      // Scroll to bottom after messages are set
+      setTimeout(() => {
+        scrollToBottom();
+      }, 100);
     } catch (err) {
       console.error('fetchMessages error:', err);
       setMessages([]);
@@ -117,17 +132,30 @@ export default function Message() {
   }, []);
 
   useEffect(() => {
-    if (selectedUser?._id) fetchMessages(selectedUser._id);
+    if (selectedUser?._id) {
+      fetchMessages(selectedUser._id);
+    }
   }, [selectedUser, fetchMessages]);
 
+  // Improved scroll function
+  const scrollToBottom = useCallback(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ 
+        behavior: 'smooth',
+        block: 'end'
+      });
+    }
+  }, []);
 
-  useEffect(() => scrollToBottom(), [messages, isTyping]);
+  useEffect(() => {
+    // Scroll when messages change or when typing starts/stops
+    const timeoutId = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [messages, isTyping, scrollToBottom]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
- 
   const emitTyping = (isTypingFlag) => {
     if (!socketRef.current?.connected || !selectedUser?.conversationId || !userdata?._id) return;
     socketRef.current.emit(isTypingFlag ? 'typing_start' : 'typing_stop', {
@@ -170,20 +198,38 @@ export default function Message() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
+      const sentMessage = res.data;
       
+      if (sentMessage) {
+        setMessages(prev => [...prev, sentMessage]);
+      }
+
+      // Update previous chats
+      setPreviousChats(prev => {
+        const updatedChats = [...prev];
+        
+        const userIndex = updatedChats.findIndex(chat => chat._id === selectedUser._id);
+        
+        if (userIndex !== -1) {
+          const updatedUser = { ...updatedChats[userIndex], lastMessage: sentMessage };
+          
+          updatedChats.splice(userIndex, 1);
+          updatedChats.unshift(updatedUser);
+        }
+        
+        return updatedChats;
+      });
+
+      // Clear input and scroll
       emitTyping(false);
       setNewMessage('');
       setImage(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
 
-     
-      await fetchMessages(selectedUser._id);
-      try {
-        const chatsRes = await axios.get(`${ServerUrl}/api/previouschat`, { withCredentials: true });
-        if (Array.isArray(chatsRes.data)) setPreviousChats(chatsRes.data);
-      } catch (err) {
-        console.error('refresh chats error:', err);
-      }
+      // Scroll to bottom after sending
+      setTimeout(() => {
+        scrollToBottom();
+      }, 150);
 
       setShowNewChat(false);
     } catch (err) {
@@ -250,13 +296,14 @@ export default function Message() {
   const isUserOnline = (userId) => onlineUsers.has(userId);
 
   return (
-    <div className="flex w-[100%] min-h-screen bg-black text-white">
-      <div className='lg:w-[20%]'>
-         <Lefthome /> </div>
-     
+    <div className="flex w-full h-screen bg-black text-white overflow-hidden">
+      <div className='lg:w-[20%] hidden lg:block h-full'>
+        <Lefthome />
+      </div>
 
-      <div className="flex-1 flex flex-col md:flex-row">
-        <aside className="w-full md:w-80 border-r border-gray-800 bg-black overflow-y-auto flex flex-col">
+      <div className="flex-1 flex h-full overflow-hidden">
+        {/* Left Sidebar - Chats List */}
+        <aside className="w-full md:w-80 border-r border-gray-800 bg-black overflow-y-auto flex flex-col h-full">
           <div className="p-4 border-b border-gray-800">
             <button
               className="w-full py-2 bg-transparent text-white border border-white rounded-lg font-medium hover:bg-white hover:text-black transition"
@@ -279,35 +326,40 @@ export default function Message() {
               </button>
             </div>
           ) : (
-            previousChats.map((user) => (
-              <div
-                key={user._id}
-                onClick={() => setSelectedUser(user)}
-                className={`p-3 cursor-pointer flex items-center gap-3 hover:bg-gray-900 ${selectedUser?._id === user._id ? 'bg-gray-800' : ''}`}
-              >
-                <div className="relative">
-                  {getProfilePic(user) ? (
-                    <img src={getProfilePic(user)} alt={getDisplayName(user)} className="w-12 h-12 rounded-full object-cover border-2 border-gray-800" />
-                  ) : (
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center ${getAvatarColor(user._id)} font-semibold`}>{getUserInitials(user)}</div>
-                  )}
-                  {isUserOnline(user._id) && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-black" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-center">
-                    <div className="font-semibold truncate">{getDisplayName(user)}</div>
-                    <div className="text-xs text-gray-400">{user.lastMessage ? formatTime(user.lastMessage.createdAt || Date.now()) : ''}</div>
+            <div className="overflow-y-auto flex-1">
+              {previousChats.map((user) => (
+                <div
+                  key={user._id}
+                  onClick={() => setSelectedUser(user)}
+                  className={`p-3 cursor-pointer flex items-center gap-3 hover:bg-gray-900 ${selectedUser?._id === user._id ? 'bg-gray-800' : ''}`}
+                >
+                  <div className="relative">
+                    {getProfilePic(user) ? (
+                      <img src={getProfilePic(user)} alt={getDisplayName(user)} className="w-12 h-12 rounded-full object-cover border-2 border-gray-800" />
+                    ) : (
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${getAvatarColor(user._id)} font-semibold`}>{getUserInitials(user)}</div>
+                    )}
+                    {isUserOnline(user._id) && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-black" />}
                   </div>
-                  <div className="text-xs text-gray-400 truncate">{user.lastMessage ? (user.lastMessage.image ? '📷 Image' : user.lastMessage.message) : 'No messages yet'}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-center">
+                      <div className="font-semibold truncate">{getDisplayName(user)}</div>
+                      <div className="text-xs text-gray-400">{user.lastMessage ? formatTime(user.lastMessage.createdAt || Date.now()) : ''}</div>
+                    </div>
+                    <div className="text-xs text-gray-400 truncate">{user.lastMessage ? (user.lastMessage.image ? '📷 Image' : user.lastMessage.message) : 'No messages yet'}</div>
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </aside>
-        <main className="flex-1 flex flex-col bg-black">
+
+        {/* Main Chat Area */}
+        <main className="flex-1 flex flex-col bg-black h-full overflow-hidden">
           {selectedUser ? (
             <>
-              <header className="p-4 border-b border-gray-800 flex items-center gap-3">
+              {/* Chat Header - Fixed */}
+              <header className="p-4 border-b border-gray-800 flex items-center gap-3 flex-shrink-0">
                 <div className="relative">
                   {getProfilePic(selectedUser) ? (
                     <img src={getProfilePic(selectedUser)} alt={getDisplayName(selectedUser)} className="w-12 h-12 rounded-full object-cover border-2 border-gray-800" />
@@ -322,47 +374,57 @@ export default function Message() {
                 </div>
               </header>
 
-              <section className="flex-1 p-4 overflow-y-auto">
-                {messages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400 p-6">
-                    <div className="text-6xl mb-3 opacity-60">💬</div>
-                    <div>No messages yet</div>
-                    <div className="text-sm mt-2">Send a message to start the conversation</div>
-                  </div>
-                ) : (
-                  messages.map((message) => (
-                    <div key={message._id || message.createdAt} className={`mb-4 flex ${message.sender?._id === userdata?._id ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[70%] px-4 py-3 rounded-2xl ${message.sender?._id === userdata?._id ? 'bg-white text-black border' : 'bg-gray-800 text-white border border-gray-700'}`}>
-                        {message.image && (
-                          <img
-                            src={getImageUrl(message.image)}
-                            alt="attachment"
-                            className="w-full max-h-72 object-cover rounded-lg mb-2 cursor-pointer"
-                            onClick={() => window.open(getImageUrl(message.image), '_blank')}
-                          />
-                        )}
-                        {message.message && <div className="whitespace-pre-wrap">{message.message}</div>}
-                        <div className="text-xs opacity-70 text-right mt-2">{formatTime(message.createdAt)}</div>
-                      </div>
+              {/* Messages Area - Scrollable */}
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-4">
+                  {messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-400 py-12">
+                      <div className="text-6xl mb-3 opacity-60">💬</div>
+                      <div>No messages yet</div>
+                      <div className="text-sm mt-2">Send a message to start the conversation</div>
                     </div>
-                  ))
-                )}
+                  ) : (
+                    <>
+                      {messages.map((message) => (
+                        <div key={message._id || message.createdAt} className={`mb-4 flex ${message.sender?._id === userdata?._id ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[70%] px-4 py-3 rounded-2xl ${message.sender?._id === userdata?._id ? 'bg-white text-black border' : 'bg-gray-800 text-white border border-gray-700'}`}>
+                            {message.image && (
+                              <img
+                                src={getImageUrl(message.image)}
+                                alt="attachment"
+                                className="w-full max-h-72 object-cover rounded-lg mb-2 cursor-pointer"
+                                onClick={() => window.open(getImageUrl(message.image), '_blank')}
+                              />
+                            )}
+                            {message.message && <div className="whitespace-pre-wrap">{message.message}</div>}
+                            <div className="text-xs opacity-70 text-right mt-2">{formatTime(message.createdAt)}</div>
+                          </div>
+                        </div>
+                      ))}
+                      
+                      {isTyping && (
+                        <div className="mb-4 flex justify-start">
+                          <div className="max-w-[70%] px-4 py-3 rounded-2xl bg-gray-800 text-white border border-gray-700">
+                            <div className="inline-flex items-center gap-2 text-sm text-gray-400">
+                              <div className="flex gap-1">
+                                <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
+                                <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
+                                <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
+                              </div>
+                              <span>typing...</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div ref={messagesEndRef} />
+                    </>
+                  )}
+                </div>
+              </div>
 
-                {isTyping && (
-                  <div className="inline-flex items-center gap-2 text-sm text-gray-400 mt-2">
-                    <div className="flex gap-1">
-                      <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
-                      <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
-                      <span className="h-2 w-2 bg-gray-400 rounded-full animate-pulse" />
-                    </div>
-                    <span>typing...</span>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </section>
-
-              <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-800">
+              {/* Message Input - Fixed at bottom */}
+              <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-800 flex-shrink-0">
                 {image && (
                   <div className="mb-3 flex items-center justify-between gap-3 bg-gray-900 p-3 rounded">
                     <div className="flex items-center gap-3">
@@ -409,7 +471,7 @@ export default function Message() {
           )}
         </main>
 
-       
+        {/* New Chat Modal */}
         {showNewChat && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 p-4">
             <div className="bg-black w-full max-w-lg rounded-lg border border-gray-800 overflow-hidden">
