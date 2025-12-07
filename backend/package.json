@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "fix-duplicates": "node scripts/fixDuplicates.js",
-    "start": "node index.js",
+    "start": "node backend/index.js",
+    "build": "cd frontend && npm install && npm run build",
     "dev": "nodemon index.js"
   },
   "keywords": [],
